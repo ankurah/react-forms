@@ -130,16 +130,17 @@ export function initAnkurahForms(deps: AnkurahDeps): void {
 // UI Component Slots (allow customization)
 // =============================================================================
 
+// UI component types - intentionally permissive to work with various UI libraries
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 interface UIComponents {
-  Input: React.ForwardRefExoticComponent<React.InputHTMLAttributes<HTMLInputElement> & React.RefAttributes<HTMLInputElement>>
-  Button: ComponentType<React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: string }>
-  Label: ComponentType<React.LabelHTMLAttributes<HTMLLabelElement>>
-  Select: ComponentType<{ value: string; onValueChange: (v: string) => void; disabled?: boolean; children: ReactNode }>
-  SelectTrigger: React.ForwardRefExoticComponent<{ id?: string; className?: string; children: ReactNode } & React.RefAttributes<HTMLButtonElement>>
-  SelectContent: ComponentType<{ children: ReactNode }>
-  SelectItem: ComponentType<{ value: string; children: ReactNode }>
-  SelectValue: ComponentType<{ placeholder?: string }>
-  PencilIcon: ComponentType<{ className?: string; style?: React.CSSProperties }>
+  Input: ComponentType<any>
+  Button: ComponentType<any>
+  Label: ComponentType<any>
+  Select: ComponentType<any>
+  SelectTrigger: ComponentType<any>
+  SelectContent: ComponentType<any>
+  SelectItem: ComponentType<any>
+  SelectValue: ComponentType<any>
 }
 
 // Default implementations using basic HTML
@@ -162,12 +163,6 @@ DefaultSelectTrigger.displayName = "DefaultSelectTrigger"
 const DefaultSelectContent: UIComponents["SelectContent"] = ({ children }) => <div>{children}</div>
 const DefaultSelectItem: UIComponents["SelectItem"] = ({ value, children }) => <option value={value}>{children}</option>
 const DefaultSelectValue: UIComponents["SelectValue"] = ({ placeholder }) => <span>{placeholder}</span>
-const DefaultPencilIcon: UIComponents["PencilIcon"] = ({ className, style }) => (
-  <svg className={className} style={style} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-    <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-    <path d="m15 5 4 4" />
-  </svg>
-)
 
 let _uiComponents: UIComponents = {
   Input: DefaultInput,
@@ -178,7 +173,6 @@ let _uiComponents: UIComponents = {
   SelectContent: DefaultSelectContent,
   SelectItem: DefaultSelectItem,
   SelectValue: DefaultSelectValue,
-  PencilIcon: DefaultPencilIcon,
 }
 
 /**
@@ -685,7 +679,7 @@ export function Field({
         </UI.Label>
         <UI.Select
           value={value ?? ""}
-          onValueChange={(v) => setOverlayValue(name, v)}
+          onValueChange={(v: string) => setOverlayValue(name, v)}
           disabled={isDisabled}
         >
           <UI.SelectTrigger
@@ -745,7 +739,7 @@ export function Field({
           value={value ?? ""}
           placeholder={placeholder}
           disabled={isDisabled}
-          onChange={(e) => {
+          onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
             const numValue = e.target.value === "" ? null : Number(e.target.value)
             setOverlayValue(name, numValue)
           }}
@@ -768,7 +762,7 @@ export function Field({
         value={value ?? ""}
         placeholder={placeholder}
         disabled={isDisabled}
-        onChange={(e) => setOverlayValue(name, e.target.value)}
+        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setOverlayValue(name, e.target.value)}
         className={cn(dirtyInputClassName, borderlessClassName)}
       />
     </div>
@@ -900,38 +894,39 @@ export function EditOnly({ children }: ModeProps) {
 }
 
 // =============================================================================
-// EditTrigger - Pencil icon button to activate edit mode
+// EditTrigger - Button to activate edit mode
 // =============================================================================
 
 interface EditTriggerProps {
+  /** Icon or content to display (e.g., <Pencil className="w-4 h-4" />) */
+  children: ReactNode
   className?: string
-  /** Size of the pencil icon (default: 4 = w-4 h-4) */
-  size?: number
 }
 
 /**
- * Pencil icon button that activates edit mode when clicked.
+ * Button that activates edit mode when clicked.
  * Only visible in view mode (editable=false).
  * Use with activateOn="trigger" for explicit edit activation.
  *
  * ```tsx
+ * import { Pencil } from "lucide-react"
+ *
  * <EntityForm activateOn="trigger" editable={isEditing} onActivate={() => setIsEditing(true)}>
  *   <div className="flex items-center justify-between">
  *     <h2>Customer Info</h2>
- *     <EditTrigger />
+ *     <EditTrigger><Pencil className="w-4 h-4" /></EditTrigger>
  *   </div>
  *   <Field name="name" label="Name" />
  * </EntityForm>
  * ```
  */
-export function EditTrigger({ className, size = 4 }: EditTriggerProps) {
+export function EditTrigger({ children, className }: EditTriggerProps) {
   const ctx = useContext(EntityFormContext)
   if (!ctx) {
     throw new Error("EditTrigger must be used within EntityForm")
   }
 
   const { editable, onActivate } = ctx
-  const UI = getUI()
 
   // Only show in view mode
   if (editable) return null
@@ -949,7 +944,7 @@ export function EditTrigger({ className, size = 4 }: EditTriggerProps) {
       )}
       aria-label="Edit"
     >
-      <UI.PencilIcon className={`w-${size} h-${size}`} style={{ width: size * 4, height: size * 4 }} />
+      {children}
     </button>
   )
 }
