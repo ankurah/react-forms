@@ -12,6 +12,15 @@
  * - When view updates to match an overlay value, that overlay entry is removed
  * - On save, only dirty fields are applied to the view
  *
+ * ## Embedded Structs (e.g., Address)
+ * Field names support dot notation for embedded Property structs:
+ * ```tsx
+ * <Field name="address.street1" label="Street" />
+ * <Field name="address.city" label="City" />
+ * ```
+ * On save, fields are grouped by root and merged with existing values:
+ * - `address.street1` + `address.city` → `mutable.address.set({ ...existing, street1, city })`
+ *
  * ## Exports
  * - `EntityForm` - Form wrapper with overlay and transaction handling
  * - `Field` - Auto-rendering field with dirty styling
@@ -82,6 +91,68 @@ import React, {
 /** Simple classname merge utility */
 function cn(...classes: (string | undefined | false | null)[]): string {
   return classes.filter(Boolean).join(" ")
+}
+
+// =============================================================================
+// Nested Value Utilities (for embedded structs like Address)
+// =============================================================================
+
+/**
+ * Get a nested value from an object using dot notation.
+ * e.g., getNestedValue(obj, 'address.street1') → obj.address?.street1
+ */
+function getNestedValue(obj: any, path: string): any {
+  if (!path.includes('.')) return obj?.[path]
+  const parts = path.split('.')
+  let current = obj
+  for (const key of parts) {
+    if (current == null) return undefined
+    current = current[key]
+  }
+  return current
+}
+
+/**
+ * Set a nested value in an object using dot notation.
+ * Mutates the target object. Creates intermediate objects as needed.
+ * e.g., setNestedValue(obj, 'address.street1', 'value')
+ */
+function setNestedValue(obj: any, path: string, value: any): void {
+  const parts = path.split('.')
+  const last = parts.pop()!
+  let current = obj
+  for (const part of parts) {
+    current[part] = current[part] ?? {}
+    current = current[part]
+  }
+  current[last] = value
+}
+
+/**
+ * Group flat dot-notation keys into nested objects.
+ * e.g., { 'address.street1': 'x', 'address.city': 'y', 'name': 'z' }
+ *    → { address: { street1: 'x', city: 'y' }, name: 'z' }
+ */
+function groupByRoot(overlay: Record<string, any>): Record<string, any> {
+  const result: Record<string, any> = {}
+  for (const [key, value] of Object.entries(overlay)) {
+    if (!key.includes('.')) {
+      result[key] = value
+    } else {
+      const [root, ...rest] = key.split('.')
+      result[root] = result[root] ?? {}
+      setNestedValue(result[root], rest.join('.'), value)
+    }
+  }
+  return result
+}
+
+/**
+ * Check if a root field name has any entries in the overlay.
+ * Used to detect if an embedded struct has been modified.
+ */
+function hasOverlayEntriesForRoot(overlay: Record<string, any>, root: string): boolean {
+  return Object.keys(overlay).some(key => key === root || key.startsWith(root + '.'))
 }
 
 // =============================================================================
@@ -375,11 +446,12 @@ export function EntityForm({
       })
 
       // Clean overlay entries where view now matches overlay value
+      // Supports dot notation for embedded structs
       setOverlay((prev) => {
         const next = { ...prev }
         let changed = false
         for (const key of Object.keys(prev)) {
-          if (view[key] === prev[key]) {
+          if (getNestedValue(view, key) === prev[key]) {
             delete next[key]
             changed = true
           }
@@ -400,9 +472,10 @@ export function EntityForm({
 
   // Set a value in the overlay
   // If value matches view, remove from overlay (no longer dirty)
+  // Supports dot notation for embedded structs
   const setOverlayValue = useCallback((name: string, value: any) => {
     setOverlay((prev) => {
-      if (value === view?.[name]) {
+      if (value === getNestedValue(view, name)) {
         // Value matches view - remove from overlay if present
         if (!(name in prev)) return prev
         const next = { ...prev }
@@ -421,7 +494,8 @@ export function EntityForm({
       // In create mode, dirty if any values in overlay
       return Object.keys(overlay).some((k) => overlay[k] !== "")
     }
-    return Object.keys(overlay).some((k) => overlay[k] !== view?.[k])
+    // Support dot notation: compare overlay value to nested view value
+    return Object.keys(overlay).some((k) => overlay[k] !== getNestedValue(view, k))
   }, [overlay, view, mode])
 
   // Handle form submit
@@ -438,22 +512,49 @@ export function EntityForm({
           // Edit: apply only dirty fields
           const mutable = view.edit(trx)
 
-          for (const [name, value] of Object.entries(overlay)) {
-            if (value === view[name]) continue // Skip if not actually dirty
+          // Group overlay by root field to handle embedded structs
+          // e.g., { 'address.street1': 'x', 'address.city': 'y', 'name': 'z' }
+          //    → { address: { street1: 'x', city: 'y' }, name: 'z' }
+          const grouped = groupByRoot(overlay)
 
-            const field = mutable[name]
-            if (!field) continue
+          for (const [rootName, value] of Object.entries(grouped)) {
+            const viewValue = view[rootName]
 
-            // Normalize empty strings to null
-            const normalizedValue = value === "" ? null : value
+            // Check if this is an embedded struct (value is object, not primitive)
+            if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+              // Embedded struct: merge overlay changes with existing view values
+              const existing = viewValue ?? {}
+              const merged: Record<string, any> = { ...existing }
 
-            // Detect field type and apply
-            if (typeof field.replace === "function") {
-              field.replace(normalizedValue ?? "")
-            } else if (typeof field.set === "function") {
-              field.set(normalizedValue)
+              // Apply overlay values, normalizing empty strings to null
+              for (const [key, val] of Object.entries(value)) {
+                merged[key] = val === "" ? null : val
+              }
+
+              const field = mutable[rootName]
+              if (field && typeof field.set === "function") {
+                field.set(merged)
+              } else {
+                console.warn(`EntityForm: Cannot set embedded struct "${rootName}"`)
+              }
             } else {
-              console.warn(`EntityForm: Unknown field type for "${name}", skipping`)
+              // Primitive field: existing logic
+              if (value === viewValue) continue // Skip if not actually dirty
+
+              const field = mutable[rootName]
+              if (!field) continue
+
+              // Normalize empty strings to null
+              const normalizedValue = value === "" ? null : value
+
+              // Detect field type and apply
+              if (typeof field.replace === "function") {
+                field.replace(normalizedValue ?? "")
+              } else if (typeof field.set === "function") {
+                field.set(normalizedValue)
+              } else {
+                console.warn(`EntityForm: Unknown field type for "${rootName}", skipping`)
+              }
             }
           }
 
@@ -462,12 +563,24 @@ export function EntityForm({
           onSuccess?.()
         } else if (mode === "create" && model) {
           // Create: use overlay as the entity data
+          // Group by root to handle embedded structs (e.g., address.street1 → address: { street1 })
+          const grouped = groupByRoot(overlay)
+
           const createData: Record<string, any> = {
             ...(defaultValuesProp ?? {}),
           }
 
-          for (const [key, value] of Object.entries(overlay)) {
-            createData[key] = value === "" ? null : value
+          for (const [key, value] of Object.entries(grouped)) {
+            if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+              // Embedded struct: normalize empty strings to null within the object
+              const normalized: Record<string, any> = {}
+              for (const [k, v] of Object.entries(value)) {
+                normalized[k] = v === "" ? null : v
+              }
+              createData[key] = normalized
+            } else {
+              createData[key] = value === "" ? null : value
+            }
           }
 
           const newView = await model.create(trx, createData)
@@ -608,7 +721,8 @@ export function Field({
   const canActivate = activateOn === "field" && !editable && !disabled
 
   // Compute display value: overlay if edited, otherwise view
-  const viewValue = view?.[name] ?? ""
+  // Supports dot notation for embedded structs (e.g., "address.street1")
+  const viewValue = getNestedValue(view, name) ?? ""
   const value = name in overlay ? overlay[name] : viewValue
 
   // Dirty if field is in overlay and differs from view
