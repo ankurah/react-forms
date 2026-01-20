@@ -13,8 +13,17 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "src"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ankurah/react-forms.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ankurah/react-forms/issues"
+  },
+  "homepage": "https://github.com/ankurah/react-forms#readme",
   "scripts": {
     "build": "tsup src/index.tsx --format esm --dts --external react",
     "dev": "tsup src/index.tsx --format esm --dts --external react --watch",
