@@ -675,17 +675,17 @@ export function EntityForm({
 
 interface FieldProps {
   name: string
-  label: string
+  /** Label shown above the field. Optional - if not provided, no label is rendered. */
+  label?: string
   type?: FieldType
   placeholder?: string
   options?: SelectOption[]
   className?: string
   disabled?: boolean
-  /** Icon to show in view mode (replaces label). When provided:
-   * - View mode: [icon] value (inline)
-   * - Edit mode: label + input (stacked)
-   */
+  /** Icon shown as prefix to the input/value. Displays consistently in both view and edit modes. */
   icon?: ReactNode
+  /** Custom className for the label element */
+  labelClassName?: string
 }
 
 export function Field({
@@ -697,6 +697,7 @@ export function Field({
   className,
   disabled,
   icon,
+  labelClassName,
 }: FieldProps) {
   const { view, overlay, setOverlayValue, editable, activateOn, onActivate } = useEntityFormContext()
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | HTMLButtonElement>(null)
@@ -728,43 +729,28 @@ export function Field({
   // Dirty if field is in overlay and differs from view
   const dirty = name in overlay && overlay[name] !== viewValue
 
-  const fieldClassName = cn("space-y-2", className)
-  const dirtyInputClassName = dirty ? "border-amber-500 bg-amber-50/50" : ""
-  const borderlessClassName = !editable ? "border-transparent shadow-none bg-transparent" : ""
+  // Helper to render label (only if provided)
+  const labelElement = label ? (
+    <UI.Label htmlFor={name} className={labelClassName} data-dirty={dirty || undefined}>
+      {label}
+    </UI.Label>
+  ) : null
 
-  // Cursor style for view mode - indicates clickability
-  const viewModeCursor = canActivate ? "cursor-text" : ""
-
-  // View mode with icon: render [icon] value inline
-  if (icon && !editable) {
-    // For select fields, find the label for the current value
-    let displayValue = value ?? ""
-    if (type === "select" && options) {
-      const option = options.find((opt) => opt.value === value)
-      displayValue = option?.label ?? value ?? ""
-    }
-
-    return (
-      <div
-        className={cn("flex items-center gap-2 py-1", viewModeCursor, className)}
-        onClick={handleActivate}
-      >
-        <span className="text-muted-foreground flex-shrink-0">{icon}</span>
-        <span className={cn("text-sm", !displayValue && "text-muted-foreground")}>
-          {displayValue || placeholder || "—"}
-        </span>
-      </div>
-    )
-  }
+  // Helper to render icon prefix (shows in both modes)
+  const iconElement = icon ? <span data-field-icon="">{icon}</span> : null
 
   // Checkbox
   if (type === "checkbox") {
     return (
       <div
-        className={cn("flex items-center gap-2", viewModeCursor, className)}
+        className={className}
+        data-field=""
+        data-field-type="checkbox"
         data-dirty={dirty || undefined}
+        data-editable={editable || undefined}
         onClick={handleActivate}
       >
+        {iconElement}
         <input
           ref={inputRef as React.RefObject<HTMLInputElement>}
           type="checkbox"
@@ -772,11 +758,9 @@ export function Field({
           checked={!!value}
           disabled={isDisabled}
           onChange={(e) => setOverlayValue(name, e.target.checked)}
-          className={cn("h-4 w-4 rounded border-gray-300", dirty && "ring-2 ring-amber-500")}
+          data-dirty={dirty || undefined}
         />
-        <UI.Label htmlFor={name} className={cn(dirty && "text-amber-700")}>
-          {label}
-        </UI.Label>
+        {labelElement}
       </div>
     )
   }
@@ -787,10 +771,16 @@ export function Field({
       console.warn(`Field "${name}": type="select" requires options prop`)
     }
     return (
-      <div className={cn(fieldClassName, viewModeCursor)} data-dirty={dirty || undefined} onClick={handleActivate}>
-        <UI.Label htmlFor={name} className={cn(dirty && "text-amber-700")}>
-          {label}
-        </UI.Label>
+      <div
+        className={className}
+        data-field=""
+        data-field-type="select"
+        data-dirty={dirty || undefined}
+        data-editable={editable || undefined}
+        onClick={handleActivate}
+      >
+        {labelElement}
+        {iconElement}
         <UI.Select
           value={value ?? ""}
           onValueChange={(v: string) => setOverlayValue(name, v)}
@@ -799,7 +789,8 @@ export function Field({
           <UI.SelectTrigger
             ref={inputRef as React.RefObject<HTMLButtonElement>}
             id={name}
-            className={cn(dirtyInputClassName, borderlessClassName)}
+            data-dirty={dirty || undefined}
+            data-editable={editable || undefined}
           >
             <UI.SelectValue placeholder={placeholder} />
           </UI.SelectTrigger>
@@ -818,10 +809,16 @@ export function Field({
   // Textarea
   if (type === "textarea") {
     return (
-      <div className={cn(fieldClassName, viewModeCursor)} data-dirty={dirty || undefined} onClick={handleActivate}>
-        <UI.Label htmlFor={name} className={cn(dirty && "text-amber-700")}>
-          {label}
-        </UI.Label>
+      <div
+        className={className}
+        data-field=""
+        data-field-type="textarea"
+        data-dirty={dirty || undefined}
+        data-editable={editable || undefined}
+        onClick={handleActivate}
+      >
+        {labelElement}
+        {iconElement}
         <textarea
           ref={inputRef as React.RefObject<HTMLTextAreaElement>}
           id={name}
@@ -829,11 +826,8 @@ export function Field({
           placeholder={placeholder}
           disabled={isDisabled}
           onChange={(e) => setOverlayValue(name, e.target.value)}
-          className={cn(
-            "flex min-h-[80px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
-            dirtyInputClassName,
-            borderlessClassName
-          )}
+          data-dirty={dirty || undefined}
+          data-editable={editable || undefined}
         />
       </div>
     )
@@ -842,10 +836,16 @@ export function Field({
   // Number
   if (type === "number") {
     return (
-      <div className={cn(fieldClassName, viewModeCursor)} data-dirty={dirty || undefined} onClick={handleActivate}>
-        <UI.Label htmlFor={name} className={cn(dirty && "text-amber-700")}>
-          {label}
-        </UI.Label>
+      <div
+        className={className}
+        data-field=""
+        data-field-type="number"
+        data-dirty={dirty || undefined}
+        data-editable={editable || undefined}
+        onClick={handleActivate}
+      >
+        {labelElement}
+        {iconElement}
         <UI.Input
           ref={inputRef as React.RefObject<HTMLInputElement>}
           id={name}
@@ -857,7 +857,8 @@ export function Field({
             const numValue = e.target.value === "" ? null : Number(e.target.value)
             setOverlayValue(name, numValue)
           }}
-          className={cn(dirtyInputClassName, borderlessClassName)}
+          data-dirty={dirty || undefined}
+          data-editable={editable || undefined}
         />
       </div>
     )
@@ -865,10 +866,16 @@ export function Field({
 
   // Default: text, email, tel, url, password
   return (
-    <div className={cn(fieldClassName, viewModeCursor)} data-dirty={dirty || undefined} onClick={handleActivate}>
-      <UI.Label htmlFor={name} className={cn(dirty && "text-amber-700")}>
-        {label}
-      </UI.Label>
+    <div
+      className={className}
+      data-field=""
+      data-field-type={type}
+      data-dirty={dirty || undefined}
+      data-editable={editable || undefined}
+      onClick={handleActivate}
+    >
+      {labelElement}
+      {iconElement}
       <UI.Input
         ref={inputRef as React.RefObject<HTMLInputElement>}
         id={name}
@@ -877,7 +884,8 @@ export function Field({
         placeholder={placeholder}
         disabled={isDisabled}
         onChange={(e: React.ChangeEvent<HTMLInputElement>) => setOverlayValue(name, e.target.value)}
-        className={cn(dirtyInputClassName, borderlessClassName)}
+        data-dirty={dirty || undefined}
+        data-editable={editable || undefined}
       />
     </div>
   )

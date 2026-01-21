@@ -120,9 +120,9 @@ Control how edit mode is activated with the `activateOn` prop:
 ]} />
 ```
 
-### Icon Mode for View State
+### Icons
 
-Fields can display with an icon in view mode and switch to a labeled input in edit mode:
+Fields can display with an icon:
 
 ```tsx
 import { Mail, Phone } from "lucide-react"
@@ -208,7 +208,42 @@ function CustomComponent() {
 | `placeholder` | `string` | Placeholder text |
 | `options` | `SelectOption[]` | Options for select type |
 | `disabled` | `boolean` | Disable the field |
-| `icon` | `ReactNode` | Icon for view mode display |
+| `icon` | `ReactNode` | Icon to display |
+| `className` | `string` | Class for field wrapper |
+| `labelClassName` | `string` | Class for label element |
+
+## Styling
+
+Field components render data attributes for styling:
+
+| Attribute | Description |
+|-----------|-------------|
+| `data-field` | Present on all field wrappers |
+| `data-field-type` | The field type (text, email, select, etc.) |
+| `data-dirty` | Present when field has unsaved changes |
+| `data-editable` | Present when form is in edit mode |
+
+Example CSS:
+
+```css
+/* Field wrapper layout */
+[data-field] {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+/* Dirty field styling */
+[data-field][data-dirty] input {
+  border-color: orange;
+}
+
+/* View mode - borderless inputs */
+[data-field]:not([data-editable]) input {
+  border-color: transparent;
+  background-color: transparent;
+}
+```
 
 ## License
 
