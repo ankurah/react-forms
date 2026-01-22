@@ -13,7 +13,7 @@
  * - On save, only dirty fields are applied to the view
  *
  * ## Embedded Structs (e.g., Address)
- * Field names support dot notation for embedded Property structs:
+ * Field names support dot notation for embedded struct properties:
  * ```tsx
  * <Field name="address.street1" label="Street" />
  * <Field name="address.city" label="City" />

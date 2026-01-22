@@ -82,19 +82,19 @@ Field components use React context, so nest any layout between EntityForm and Fi
 </EntityForm>
 ```
 
-### Activation Modes
+### Edit Triggers
 
-Control how edit mode is activated with the `activateOn` prop:
+Control how edit mode is entered with the `editTrigger` prop (mode="rw" only):
 
 ```tsx
-// "field" (default): clicking any field activates edit mode
-<EntityForm view={customer} activateOn="field" editable={isEditing} onActivate={() => setIsEditing(true)}>
+// "field" (default): clicking any field enters edit mode
+<EntityForm view={customer} editTrigger="field">
 
-// "form": clicking anywhere in the form activates edit mode
-<EntityForm view={customer} activateOn="form" editable={isEditing} onActivate={() => setIsEditing(true)}>
+// "form": clicking anywhere in the form enters edit mode
+<EntityForm view={customer} editTrigger="form">
 
-// "trigger": only via EditTrigger button or external trigger
-<EntityForm view={customer} activateOn="trigger" editable={isEditing} onActivate={() => setIsEditing(true)}>
+// null: only via EditTrigger button
+<EntityForm view={customer} editTrigger={null}>
   <div className="flex items-center justify-between">
     <h2>Customer Info</h2>
     <EditTrigger><Pencil className="w-4 h-4" /></EditTrigger>
@@ -134,7 +134,7 @@ import { Mail, Phone } from "lucide-react"
 ### Conditional Rendering
 
 ```tsx
-<EntityForm view={customer} editable={isEditing}>
+<EntityForm view={customer}>
   <ViewOnly>
     {/* Only shown when not editing */}
     <div className="text-lg font-bold">{customer.name}</div>
@@ -150,12 +150,13 @@ import { Mail, Phone } from "lucide-react"
 
 ```tsx
 function CustomComponent() {
-  const { editable, mode } = useEditable()
+  const { editing, isNew, formMode } = useEditing()
 
   return (
     <div>
-      {mode === "create" ? "Creating new" : "Editing"}
-      {editable ? " (active)" : " (viewing)"}
+      {isNew ? "Creating new" : "Editing"}
+      {editing ? " (active)" : " (viewing)"}
+      {formMode === "r" ? " (read-only)" : null}
     </div>
   )
 }
@@ -181,7 +182,7 @@ function CustomComponent() {
 |----------|-------------|
 | `initAnkurahForms(deps)` | Initialize with Ankurah context |
 | `setUIComponents(components)` | Configure UI components |
-| `useEditable()` | Hook to access edit state from context |
+| `useEditing()` | Hook to access editing state from context |
 
 ### EntityForm Props
 
@@ -190,10 +191,10 @@ function CustomComponent() {
 | `view` | `EditableView` | Existing view for edit mode |
 | `model` | `ModelClass` | Model class for create mode |
 | `defaultValues` | `Record<string, any>` | Default values for create mode |
-| `editable` | `boolean` | Whether form is editable (default: true) |
-| `activateOn` | `"field" \| "form" \| "trigger"` | How edit mode is activated |
-| `onActivate` | `() => void` | Called when edit mode is activated |
-| `onDeactivate` | `() => void` | Called when focus leaves with no dirty fields |
+| `mode` | `"r" \| "rw" \| "w"` | Form mode (read-only, view+edit, or write-only) |
+| `editTrigger` | `"field" \| "form" \| null` | How edit mode is entered (mode="rw" only) |
+| `onStartEditing` | `() => void` | Called when edit mode is entered |
+| `onStopEditing` | `() => void` | Called when edit mode is exited |
 | `onCreate` | `(view) => void` | Called after successful create |
 | `onSuccess` | `() => void` | Called after successful edit |
 | `onError` | `(error) => void` | Called on error |
@@ -205,7 +206,8 @@ function CustomComponent() {
 | `name` | `string` | Field name (must match entity property) |
 | `label` | `string` | Label text |
 | `type` | `FieldType` | Input type (default: "text") |
-| `placeholder` | `string` | Placeholder text |
+| `placeholder` | `string` | Placeholder text (edit mode) |
+| `emptyText` | `string` | Text shown in view mode when value is empty |
 | `options` | `SelectOption[]` | Options for select type |
 | `disabled` | `boolean` | Disable the field |
 | `icon` | `ReactNode` | Icon to display |
@@ -221,7 +223,7 @@ Field components render data attributes for styling:
 | `data-field` | Present on all field wrappers |
 | `data-field-type` | The field type (text, email, select, etc.) |
 | `data-dirty` | Present when field has unsaved changes |
-| `data-editable` | Present when form is in edit mode |
+| `data-editing` | Present when form is in edit mode |
 
 Example CSS:
 
@@ -239,7 +241,7 @@ Example CSS:
 }
 
 /* View mode - borderless inputs */
-[data-field]:not([data-editable]) input {
+[data-field]:not([data-editing]) input {
   border-color: transparent;
   background-color: transparent;
 }
