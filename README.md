@@ -195,6 +195,7 @@ function CustomComponent() {
 | `editTrigger` | `"field" \| "form" \| null` | How edit mode is entered (mode="rw" only) |
 | `onStartEditing` | `() => void` | Called when edit mode is entered |
 | `onStopEditing` | `() => void` | Called when edit mode is exited |
+| `submitTimeoutMs` | `number` | Max time to wait for save before error (ms), 0 disables |
 | `onCreate` | `(view) => void` | Called after successful create |
 | `onSuccess` | `() => void` | Called after successful edit |
 | `onError` | `(error) => void` | Called on error |

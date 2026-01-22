@@ -404,6 +404,8 @@ interface EntityFormProps {
   onSuccess?: () => void
   /** Called on error */
   onError?: (error: unknown) => void
+  /** Max time to wait for save before showing error (ms). Set 0 to disable. */
+  submitTimeoutMs?: number
   className?: string
 }
 
@@ -422,6 +424,7 @@ export function EntityForm({
   onCreate,
   onSuccess,
   onError,
+  submitTimeoutMs: submitTimeoutMsProp,
   className,
 }: EntityFormProps) {
   // Track internally created view (for create-then-edit flow)
@@ -488,8 +491,18 @@ export function EntityForm({
   // Error and submitting state
   const [saveError, setSaveError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const submitTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const submitTimedOutRef = useRef(false)
+  const submitTimeoutMs = submitTimeoutMsProp ?? 5000
 
   const clearSaveError = useCallback(() => setSaveError(null), [])
+
+  const clearSubmitTimeout = useCallback(() => {
+    if (submitTimeoutRef.current) {
+      clearTimeout(submitTimeoutRef.current)
+      submitTimeoutRef.current = null
+    }
+  }, [])
 
   // Clear overlay when switching to a different entity
   useEffect(() => {
@@ -578,6 +591,16 @@ export function EntityForm({
       e.preventDefault()
       setIsSubmitting(true)
       setSaveError(null)
+      submitTimedOutRef.current = false
+
+      if (submitTimeoutMs > 0) {
+        clearSubmitTimeout()
+        submitTimeoutRef.current = setTimeout(() => {
+          submitTimedOutRef.current = true
+          setSaveError("Save failed")
+          setIsSubmitting(false)
+        }, submitTimeoutMs)
+      }
 
       try {
         const trx = getDeps().getContext().begin()
@@ -633,6 +656,7 @@ export function EntityForm({
           }
 
           await trx.commit()
+          if (submitTimedOutRef.current) return
           setOverlay({})
           stopEditing()
           onSuccess?.()
@@ -660,6 +684,7 @@ export function EntityForm({
 
           const newView = await model.create(trx, createData)
           await trx.commit()
+          if (submitTimedOutRef.current) return
           setCreatedView(newView)
           setOverlay({})
           onCreate?.(newView)
@@ -670,6 +695,7 @@ export function EntityForm({
         setSaveError(message)
         onError?.(error)
       } finally {
+        clearSubmitTimeout()
         setIsSubmitting(false)
       }
     },
