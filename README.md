@@ -1,6 +1,6 @@
 # @ankurah/react-forms
 
-DRY form components for creating and editing Ankurah entities with overlay-based staged edits.
+Form components for creating and editing Ankurah entities with overlay-based staged edits.
 
 ## Installation
 
@@ -131,6 +131,16 @@ import { Mail, Phone } from "lucide-react"
 <Field name="phone" label="Phone" type="tel" icon={<Phone className="w-4 h-4" />} />
 ```
 
+### Save Errors
+
+```tsx
+// Default error rendering
+<SaveError />
+
+// Custom message (for layout-specific messaging)
+<SaveError>We could not save your changes</SaveError>
+```
+
 ### Conditional Rendering
 
 ```tsx
@@ -207,8 +217,8 @@ function CustomComponent() {
 | `name` | `string` | Field name (must match entity property) |
 | `label` | `string` | Label text |
 | `type` | `FieldType` | Input type (default: "text") |
-| `placeholder` | `string` | Placeholder text (edit mode) |
-| `emptyText` | `string` | Text shown in view mode when value is empty |
+| `placeholder` | `string` | Placeholder text (edit mode, defaults to emptyText) |
+| `emptyText` | `string` | Text shown in view mode when value is empty (defaults to placeholder) |
 | `options` | `SelectOption[]` | Options for select type |
 | `disabled` | `boolean` | Disable the field |
 | `icon` | `ReactNode` | Icon to display |
@@ -224,6 +234,7 @@ Field components render data attributes for styling:
 | `data-field` | Present on all field wrappers |
 | `data-field-type` | The field type (text, email, select, etc.) |
 | `data-dirty` | Present when field has unsaved changes |
+| `data-error` | Present when field matches a save error |
 | `data-editing` | Present when form is in edit mode |
 
 Example CSS:
@@ -239,6 +250,11 @@ Example CSS:
 /* Dirty field styling */
 [data-field][data-dirty] input {
   border-color: orange;
+}
+
+/* Error field styling */
+[data-field][data-error] input {
+  border-color: red;
 }
 
 /* View mode - borderless inputs */

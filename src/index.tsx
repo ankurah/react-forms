@@ -334,6 +334,7 @@ interface EntityFormContextValue {
   setOverlayValue: (name: string, value: any) => void
   hasDirtyFields: boolean
   saveError: string | null
+  saveErrorField: string | null
   clearSaveError: () => void
   isSubmitting: boolean
   /** Enter edit mode (only works in mode="rw") */
@@ -358,6 +359,14 @@ type FieldType =
 // =============================================================================
 
 const EntityFormContext = createContext<EntityFormContextValue | null>(null)
+
+function formatSaveError(message: string): { message: string; field: string | null } {
+  const match = message.match(/missing field [`'"]?([a-zA-Z0-9_.-]+)[`'"]?/)
+  if (!match) return { message, field: null }
+  const field = match[1].replace(/_/g, " ")
+  const label = field.charAt(0).toUpperCase() + field.slice(1)
+  return { message: `${label} is required`, field: match[1] }
+}
 
 function useEntityFormContext() {
   const ctx = useContext(EntityFormContext)
@@ -490,12 +499,16 @@ export function EntityForm({
 
   // Error and submitting state
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [saveErrorField, setSaveErrorField] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const submitTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const submitTimedOutRef = useRef(false)
   const submitTimeoutMs = submitTimeoutMsProp ?? 5000
 
-  const clearSaveError = useCallback(() => setSaveError(null), [])
+  const clearSaveError = useCallback(() => {
+    setSaveError(null)
+    setSaveErrorField(null)
+  }, [])
 
   const clearSubmitTimeout = useCallback(() => {
     if (submitTimeoutRef.current) {
@@ -508,6 +521,7 @@ export function EntityForm({
   useEffect(() => {
     setOverlay({})
     setSaveError(null)
+    setSaveErrorField(null)
   }, [entityId])
 
   // Clear overlay when exiting edit mode (editing changes from true to false)
@@ -515,6 +529,7 @@ export function EntityForm({
     if (!editing) {
       setOverlay({})
       setSaveError(null)
+      setSaveErrorField(null)
     }
   }, [editing])
 
@@ -569,6 +584,7 @@ export function EntityForm({
     })
     // Clear save error when user starts editing
     setSaveError(null)
+    setSaveErrorField(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entityId])
 
@@ -591,6 +607,7 @@ export function EntityForm({
       e.preventDefault()
       setIsSubmitting(true)
       setSaveError(null)
+      setSaveErrorField(null)
       submitTimedOutRef.current = false
 
       if (submitTimeoutMs > 0) {
@@ -598,6 +615,7 @@ export function EntityForm({
         submitTimeoutRef.current = setTimeout(() => {
           submitTimedOutRef.current = true
           setSaveError("Save failed")
+          setSaveErrorField(null)
           setIsSubmitting(false)
         }, submitTimeoutMs)
       }
@@ -691,8 +709,22 @@ export function EntityForm({
         }
       } catch (error) {
         console.error("EntityForm: Save failed:", error)
-        const message = error instanceof Error ? error.message : "Save failed"
-        setSaveError(message)
+        let message = "Save failed"
+        if (error instanceof Error) {
+          message = error.message
+        } else if (typeof error === "string") {
+          message = error
+        } else if (error && typeof error === "object" && "message" in error && typeof (error as any).message === "string") {
+          message = (error as any).message
+        } else {
+          const fallback = String(error)
+          if (fallback && fallback !== "[object Object]") {
+            message = fallback
+          }
+        }
+        const parsed = formatSaveError(message)
+        setSaveError(parsed.message)
+        setSaveErrorField(parsed.field)
         onError?.(error)
       } finally {
         clearSubmitTimeout()
@@ -715,6 +747,7 @@ export function EntityForm({
       setOverlayValue,
       hasDirtyFields,
       saveError,
+      saveErrorField,
       clearSaveError,
       isSubmitting,
       startEditing,
@@ -730,6 +763,7 @@ export function EntityForm({
       setOverlayValue,
       hasDirtyFields,
       saveError,
+      saveErrorField,
       clearSaveError,
       isSubmitting,
       startEditing,
@@ -810,7 +844,7 @@ export function Field({
   icon,
   labelClassName,
 }: FieldProps) {
-  const { view, overlay, setOverlayValue, editing, editTrigger, formMode, startEditing } = useEntityFormContext()
+  const { view, overlay, setOverlayValue, editing, editTrigger, formMode, startEditing, saveErrorField } = useEntityFormContext()
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | HTMLButtonElement | HTMLSelectElement>(null)
   const UI = getUI()
 
@@ -838,6 +872,7 @@ export function Field({
 
   // Dirty if field is in overlay and differs from view
   const dirty = name in overlay && overlay[name] !== viewValue
+  const hasError = !!saveErrorField && saveErrorField === name
 
   // Helper to render label (only if provided)
   const labelElement = label ? (
@@ -852,7 +887,9 @@ export function Field({
 
   // Style to override the "not-allowed" cursor on disabled inputs in view mode
   const viewModeInputStyle = canStartEditing ? { cursor: "inherit", pointerEvents: "none" } as const : undefined
-  const showEmptyText = !editing && !!emptyText && (value === "" || value == null)
+  const resolvedPlaceholder = placeholder ?? (typeof emptyText === "string" ? emptyText : undefined)
+  const resolvedEmptyText = emptyText ?? resolvedPlaceholder
+  const showEmptyText = !editing && !!resolvedEmptyText && (value === "" || value == null)
 
   if (showEmptyText && type !== "checkbox") {
     const emptyCursorClass = type === "select" ? "cursor-pointer" : "cursor-text"
@@ -862,6 +899,7 @@ export function Field({
         data-field=""
         data-field-type={type}
         data-dirty={dirty || undefined}
+        data-error={hasError || undefined}
         data-editing={editing || undefined}
         data-can-edit={canStartEditing || undefined}
         data-has-icon={hasIcon || undefined}
@@ -869,7 +907,7 @@ export function Field({
       >
         {labelElement}
         {iconElement}
-        <span data-field-empty="">{emptyText}</span>
+        <span data-field-empty="">{resolvedEmptyText}</span>
       </div>
     )
   }
@@ -882,6 +920,7 @@ export function Field({
         data-field=""
         data-field-type="checkbox"
         data-dirty={dirty || undefined}
+        data-error={hasError || undefined}
         data-editing={editing || undefined}
         data-can-edit={canStartEditing || undefined}
         data-has-icon={hasIcon || undefined}
@@ -897,6 +936,8 @@ export function Field({
           style={viewModeInputStyle}
           onChange={(e) => setOverlayValue(name, e.target.checked)}
           data-dirty={dirty || undefined}
+          data-error={hasError || undefined}
+          aria-invalid={hasError || undefined}
         />
         {labelElement}
       </div>
@@ -915,6 +956,7 @@ export function Field({
           data-field=""
           data-field-type="select"
           data-dirty={dirty || undefined}
+          data-error={hasError || undefined}
           data-editing={editing || undefined}
           data-can-edit={canStartEditing || undefined}
           data-has-icon={hasIcon || undefined}
@@ -931,8 +973,10 @@ export function Field({
             onChange={(e) => setOverlayValue(name, e.target.value)}
             data-dirty={dirty || undefined}
             data-editing={editing || undefined}
+            data-error={hasError || undefined}
+            aria-invalid={hasError || undefined}
           >
-            {placeholder ? <option value="" disabled>{placeholder}</option> : null}
+            {resolvedPlaceholder ? <option value="" disabled>{resolvedPlaceholder}</option> : null}
             {options?.map((opt) => (
               <option key={opt.value} value={opt.value}>
                 {opt.label}
@@ -948,6 +992,7 @@ export function Field({
         data-field=""
         data-field-type="select"
         data-dirty={dirty || undefined}
+        data-error={hasError || undefined}
         data-editing={editing || undefined}
         data-can-edit={canStartEditing || undefined}
         data-has-icon={hasIcon || undefined}
@@ -962,12 +1007,14 @@ export function Field({
         >
           <UI.SelectTrigger
             ref={inputRef as React.RefObject<HTMLButtonElement>}
-            id={name}
-            data-dirty={dirty || undefined}
-            data-editing={editing || undefined}
-            style={viewModeInputStyle}
-          >
-            <UI.SelectValue placeholder={placeholder} />
+          id={name}
+          data-dirty={dirty || undefined}
+          data-editing={editing || undefined}
+          style={viewModeInputStyle}
+          data-error={hasError || undefined}
+          aria-invalid={hasError || undefined}
+        >
+          <UI.SelectValue placeholder={resolvedPlaceholder} />
           </UI.SelectTrigger>
           <UI.SelectContent>
             {options?.map((opt) => (
@@ -989,6 +1036,7 @@ export function Field({
         data-field=""
         data-field-type="textarea"
         data-dirty={dirty || undefined}
+        data-error={hasError || undefined}
         data-editing={editing || undefined}
         data-can-edit={canStartEditing || undefined}
         data-has-icon={hasIcon || undefined}
@@ -1000,12 +1048,14 @@ export function Field({
           ref={inputRef as React.RefObject<HTMLTextAreaElement>}
           id={name}
           value={value ?? ""}
-          placeholder={placeholder}
+          placeholder={resolvedPlaceholder}
           disabled={isDisabled}
           style={viewModeInputStyle}
           onChange={(e) => setOverlayValue(name, e.target.value)}
           data-dirty={dirty || undefined}
           data-editing={editing || undefined}
+          data-error={hasError || undefined}
+          aria-invalid={hasError || undefined}
         />
       </div>
     )
@@ -1019,6 +1069,7 @@ export function Field({
         data-field=""
         data-field-type="number"
         data-dirty={dirty || undefined}
+        data-error={hasError || undefined}
         data-editing={editing || undefined}
         data-can-edit={canStartEditing || undefined}
         data-has-icon={hasIcon || undefined}
@@ -1031,7 +1082,7 @@ export function Field({
           id={name}
           type="number"
           value={value ?? ""}
-          placeholder={placeholder}
+          placeholder={resolvedPlaceholder}
           disabled={isDisabled}
           style={viewModeInputStyle}
           onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1040,6 +1091,8 @@ export function Field({
           }}
           data-dirty={dirty || undefined}
           data-editing={editing || undefined}
+          data-error={hasError || undefined}
+          aria-invalid={hasError || undefined}
         />
       </div>
     )
@@ -1052,6 +1105,7 @@ export function Field({
       data-field=""
       data-field-type={type}
       data-dirty={dirty || undefined}
+      data-error={hasError || undefined}
       data-editing={editing || undefined}
       data-can-edit={canStartEditing || undefined}
       data-has-icon={hasIcon || undefined}
@@ -1064,12 +1118,14 @@ export function Field({
         id={name}
         type={type}
         value={value ?? ""}
-        placeholder={placeholder}
+        placeholder={resolvedPlaceholder}
         disabled={isDisabled}
         style={viewModeInputStyle}
         onChange={(e: React.ChangeEvent<HTMLInputElement>) => setOverlayValue(name, e.target.value)}
         data-dirty={dirty || undefined}
         data-editing={editing || undefined}
+        data-error={hasError || undefined}
+        aria-invalid={hasError || undefined}
       />
     </div>
   )
@@ -1146,13 +1202,14 @@ export function Cancel({ children = "Cancel", className }: CancelProps) {
 
 interface SaveErrorProps {
   className?: string
+  children?: ReactNode
 }
 
 /**
  * Displays save errors from the EntityForm.
  * Position anywhere within the form. Errors auto-clear when user edits.
  */
-export function SaveError({ className }: SaveErrorProps) {
+export function SaveError({ className, children }: SaveErrorProps) {
   const { saveError, clearSaveError } = useEntityFormContext()
 
   if (!saveError) return null
@@ -1160,17 +1217,17 @@ export function SaveError({ className }: SaveErrorProps) {
   return (
     <div
       className={cn(
-        "rounded-md bg-destructive/10 border border-destructive/20 px-4 py-3 text-sm text-destructive",
+        "text-sm text-red-600",
         className
       )}
       role="alert"
     >
       <div className="flex items-start justify-between gap-2">
-        <span>{saveError}</span>
+        <span>{children ?? saveError}</span>
         <button
           type="button"
           onClick={clearSaveError}
-          className="text-destructive/70 hover:text-destructive -mt-0.5"
+          className="text-destructive/70 hover:text-destructive"
           aria-label="Dismiss error"
         >
           ×
