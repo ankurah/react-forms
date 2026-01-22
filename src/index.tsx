@@ -761,6 +761,8 @@ interface FieldProps {
   label?: string
   type?: FieldType
   placeholder?: string
+  /** Text to show when in view mode and the value is empty */
+  emptyText?: string
   options?: SelectOption[]
   className?: string
   disabled?: boolean
@@ -775,6 +777,7 @@ export function Field({
   label,
   type = "text",
   placeholder,
+  emptyText,
   options,
   className,
   disabled,
@@ -782,7 +785,7 @@ export function Field({
   labelClassName,
 }: FieldProps) {
   const { view, overlay, setOverlayValue, editing, editTrigger, formMode, startEditing } = useEntityFormContext()
-  const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | HTMLButtonElement>(null)
+  const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | HTMLButtonElement | HTMLSelectElement>(null)
   const UI = getUI()
 
   // Field is disabled if explicitly disabled OR if form is not in editing mode
@@ -823,6 +826,27 @@ export function Field({
 
   // Style to override the "not-allowed" cursor on disabled inputs in view mode
   const viewModeInputStyle = canStartEditing ? { cursor: "inherit", pointerEvents: "none" } as const : undefined
+  const showEmptyText = !editing && !!emptyText && (value === "" || value == null)
+
+  if (showEmptyText && type !== "checkbox") {
+    const emptyCursorClass = type === "select" ? "cursor-pointer" : "cursor-text"
+    return (
+      <div
+        className={cn(className, canStartEditing && emptyCursorClass)}
+        data-field=""
+        data-field-type={type}
+        data-dirty={dirty || undefined}
+        data-editing={editing || undefined}
+        data-can-edit={canStartEditing || undefined}
+        data-has-icon={hasIcon || undefined}
+        onClick={handleStartEditing}
+      >
+        {labelElement}
+        {iconElement}
+        <span data-field-empty="">{emptyText}</span>
+      </div>
+    )
+  }
 
   // Checkbox
   if (type === "checkbox") {
@@ -857,6 +881,40 @@ export function Field({
   if (type === "select") {
     if (!options) {
       console.warn(`Field "${name}": type="select" requires options prop`)
+    }
+    if (UI.Select === DefaultSelect) {
+      return (
+        <div
+          className={cn(className, canStartEditing && "cursor-pointer")}
+          data-field=""
+          data-field-type="select"
+          data-dirty={dirty || undefined}
+          data-editing={editing || undefined}
+          data-can-edit={canStartEditing || undefined}
+          data-has-icon={hasIcon || undefined}
+          onClick={handleStartEditing}
+        >
+          {labelElement}
+          {iconElement}
+          <select
+            ref={inputRef as React.RefObject<HTMLSelectElement>}
+            id={name}
+            value={value ?? ""}
+            disabled={isDisabled}
+            style={viewModeInputStyle}
+            onChange={(e) => setOverlayValue(name, e.target.value)}
+            data-dirty={dirty || undefined}
+            data-editing={editing || undefined}
+          >
+            {placeholder ? <option value="" disabled>{placeholder}</option> : null}
+            {options?.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      )
     }
     return (
       <div
