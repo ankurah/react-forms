@@ -35,7 +35,8 @@
  * ## Edit Triggers (editTrigger prop) - Edit mode only
  * Controls how edit mode is entered when viewing an existing entity:
  * - `"field"` (default): clicking any field starts editing
- * - `"trigger"`: only via EditTrigger button
+ * - `"form"`: clicking anywhere in the form starts editing
+ * - `null`: no implicit click triggering (only EditTrigger button works)
  *
  * Note: In create mode (no view), the form is always in editing mode since there's
  * nothing to "view" yet. The editTrigger prop only applies to edit mode.
@@ -445,12 +446,15 @@ export function EntityForm({
   // Compute actual editing state based on mode
   const editing = formMode === "w" ? true : formMode === "r" ? false : isEditing
 
-  // Reset editing state when form mode changes (e.g., create → edit transition)
+  // Track if we just transitioned from create to edit (for staying in edit mode)
+  const wasCreating = useRef(isNew)
   useEffect(() => {
-    if (formMode === "rw") {
-      setIsEditing(false) // Start in view mode for rw
+    if (wasCreating.current && !isNew) {
+      // Just created - stay in edit mode
+      setIsEditing(true)
     }
-  }, [formMode])
+    wasCreating.current = isNew
+  }, [isNew])
 
   // Start editing handler (only works in mode="rw")
   const startEditing = useCallback(() => {
@@ -784,20 +788,19 @@ export function Field({
   // Field is disabled if explicitly disabled OR if form is not in editing mode
   const isDisabled = disabled || !editing
 
-  // Handler to start editing when clicking a non-editing field
-  // Only active when editTrigger="field" and mode="rw"
-  const handleStartEditing = useCallback(() => {
-    if (formMode === "rw" && editTrigger === "field" && !editing) {
-      startEditing()
-      // Focus this field after React re-renders with editing=true
-      requestAnimationFrame(() => {
-        inputRef.current?.focus()
-      })
-    }
-  }, [formMode, editTrigger, editing, startEditing])
+  // Should this field be clickable to start editing?
+  // True when in view mode and either: editTrigger="field" (click this field) or editTrigger="form" (click anywhere)
+  const canStartEditing = formMode === "rw" && (editTrigger === "field" || editTrigger === "form") && !editing && !disabled
 
-  // Should this field show clickable cursor in view mode?
-  const canStartEditing = formMode === "rw" && editTrigger === "field" && !editing && !disabled
+  // Handler to start editing when clicking a non-editing field
+  const handleStartEditing = useCallback(() => {
+    if (!canStartEditing) return
+    startEditing()
+    // Focus this field after React re-renders with editing=true
+    requestAnimationFrame(() => {
+      inputRef.current?.focus()
+    })
+  }, [canStartEditing, startEditing])
 
   // Compute display value: overlay if edited, otherwise view
   // Supports dot notation for embedded structs (e.g., "address.street1")
@@ -815,17 +818,23 @@ export function Field({
   ) : null
 
   // Helper to render icon prefix (shows in both modes)
+  const hasIcon = !!icon
   const iconElement = icon ? <span data-field-icon="">{icon}</span> : null
+
+  // Style to override the "not-allowed" cursor on disabled inputs in view mode
+  const viewModeInputStyle = canStartEditing ? { cursor: "inherit", pointerEvents: "none" } as const : undefined
 
   // Checkbox
   if (type === "checkbox") {
     return (
       <div
-        className={className}
+        className={cn(className, canStartEditing && "cursor-pointer")}
         data-field=""
         data-field-type="checkbox"
         data-dirty={dirty || undefined}
         data-editing={editing || undefined}
+        data-can-edit={canStartEditing || undefined}
+        data-has-icon={hasIcon || undefined}
         onClick={handleStartEditing}
       >
         {iconElement}
@@ -835,6 +844,7 @@ export function Field({
           id={name}
           checked={!!value}
           disabled={isDisabled}
+          style={viewModeInputStyle}
           onChange={(e) => setOverlayValue(name, e.target.checked)}
           data-dirty={dirty || undefined}
         />
@@ -850,11 +860,13 @@ export function Field({
     }
     return (
       <div
-        className={className}
+        className={cn(className, canStartEditing && "cursor-pointer")}
         data-field=""
         data-field-type="select"
         data-dirty={dirty || undefined}
         data-editing={editing || undefined}
+        data-can-edit={canStartEditing || undefined}
+        data-has-icon={hasIcon || undefined}
         onClick={handleStartEditing}
       >
         {labelElement}
@@ -869,6 +881,7 @@ export function Field({
             id={name}
             data-dirty={dirty || undefined}
             data-editing={editing || undefined}
+            style={viewModeInputStyle}
           >
             <UI.SelectValue placeholder={placeholder} />
           </UI.SelectTrigger>
@@ -888,11 +901,13 @@ export function Field({
   if (type === "textarea") {
     return (
       <div
-        className={className}
+        className={cn(className, canStartEditing && "cursor-text")}
         data-field=""
         data-field-type="textarea"
         data-dirty={dirty || undefined}
         data-editing={editing || undefined}
+        data-can-edit={canStartEditing || undefined}
+        data-has-icon={hasIcon || undefined}
         onClick={handleStartEditing}
       >
         {labelElement}
@@ -903,6 +918,7 @@ export function Field({
           value={value ?? ""}
           placeholder={placeholder}
           disabled={isDisabled}
+          style={viewModeInputStyle}
           onChange={(e) => setOverlayValue(name, e.target.value)}
           data-dirty={dirty || undefined}
           data-editing={editing || undefined}
@@ -915,11 +931,13 @@ export function Field({
   if (type === "number") {
     return (
       <div
-        className={className}
+        className={cn(className, canStartEditing && "cursor-text")}
         data-field=""
         data-field-type="number"
         data-dirty={dirty || undefined}
         data-editing={editing || undefined}
+        data-can-edit={canStartEditing || undefined}
+        data-has-icon={hasIcon || undefined}
         onClick={handleStartEditing}
       >
         {labelElement}
@@ -931,6 +949,7 @@ export function Field({
           value={value ?? ""}
           placeholder={placeholder}
           disabled={isDisabled}
+          style={viewModeInputStyle}
           onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
             const numValue = e.target.value === "" ? null : Number(e.target.value)
             setOverlayValue(name, numValue)
@@ -945,11 +964,13 @@ export function Field({
   // Default: text, email, tel, url, password
   return (
     <div
-      className={className}
+      className={cn(className, canStartEditing && "cursor-text")}
       data-field=""
       data-field-type={type}
       data-dirty={dirty || undefined}
       data-editing={editing || undefined}
+      data-can-edit={canStartEditing || undefined}
+      data-has-icon={hasIcon || undefined}
       onClick={handleStartEditing}
     >
       {labelElement}
@@ -961,6 +982,7 @@ export function Field({
         value={value ?? ""}
         placeholder={placeholder}
         disabled={isDisabled}
+        style={viewModeInputStyle}
         onChange={(e: React.ChangeEvent<HTMLInputElement>) => setOverlayValue(name, e.target.value)}
         data-dirty={dirty || undefined}
         data-editing={editing || undefined}
