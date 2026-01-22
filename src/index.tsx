@@ -23,26 +23,33 @@
  *
  * ## Exports
  * - `EntityForm` - Form wrapper with overlay and transaction handling
- * - `Field` - Auto-rendering field with dirty styling
+ * - `Field` - Auto-rendering field with dirty styling (uses data-editing attribute)
  * - `Submit` - Submit button, disabled when no dirty fields
+ * - `Cancel` - Cancel button to discard changes and exit editing
  * - `SaveError` - Displays save errors, auto-clears on edit
- * - `ViewOnly` - Renders children only in view mode (editable=false)
- * - `EditOnly` - Renders children only in edit mode (editable=true)
- * - `EditTrigger` - Pencil icon button to activate edit mode
- * - `useEditable` - Hook to access editable state from context
+ * - `ViewOnly` - Renders children only in view mode (editing=false)
+ * - `EditOnly` - Renders children only in edit mode (editing=true)
+ * - `EditTrigger` - Button to enter edit mode (only visible in view mode)
+ * - `useEditing` - Hook to access editing state from context
  *
- * ## Activation Modes (activateOn prop)
- * - `"field"` (default): clicking any field activates edit mode
- * - `"form"`: clicking anywhere in the form activates edit mode
- * - `"trigger"`: only via EditTrigger or external trigger
+ * ## Edit Triggers (editTrigger prop) - Edit mode only
+ * Controls how edit mode is entered when viewing an existing entity:
+ * - `"field"` (default): clicking any field starts editing
+ * - `"trigger"`: only via EditTrigger button
+ *
+ * Note: In create mode (no view), the form is always in editing mode since there's
+ * nothing to "view" yet. The editTrigger prop only applies to edit mode.
  *
  * ## Usage (Edit)
  * ```tsx
  * <EntityForm view={customerView} onSuccess={() => navigate('/customers')}>
  *   <Field name="name" label="Name" />
  *   <Field name="email" label="Email" type="email" />
- *   <SaveError />
- *   <Submit>Save</Submit>
+ *   <EditOnly>
+ *     <SaveError />
+ *     <Cancel />
+ *     <Submit>Save</Submit>
+ *   </EditOnly>
  * </EntityForm>
  * ```
  *
@@ -296,22 +303,42 @@ interface SelectOption {
   label: string
 }
 
-/** Controls how edit mode is activated */
-type ActivateOn = "field" | "form" | "trigger"
+/**
+ * Form mode controlling read/write capabilities:
+ * - "r": Read-only (view only, no editing)
+ * - "rw": Read-write (view first, can enter edit mode) - default for edit
+ * - "w": Write-only (always editing, no view state) - default for create
+ */
+type FormMode = "r" | "rw" | "w"
+
+/**
+ * Controls how edit mode is entered (only applies when mode="rw"):
+ * - "field": clicking any field starts editing (default)
+ * - "form": clicking anywhere in the form starts editing
+ * - null: no implicit click triggering (only EditTrigger button works)
+ */
+type EditTrigger = "field" | "form" | null
 
 interface EntityFormContextValue {
   view: EditableView | null
-  mode: "create" | "edit"
-  editable: boolean
-  activateOn: ActivateOn
+  /** Whether this is a new entity (create) or existing (edit) */
+  isNew: boolean
+  /** Current editing state */
+  editing: boolean
+  /** How edit mode is triggered (only relevant for mode="rw") */
+  editTrigger: EditTrigger
+  /** Form mode: r (read-only), rw (read-write), w (write-only) */
+  formMode: FormMode
   overlay: Record<string, any>
   setOverlayValue: (name: string, value: any) => void
   hasDirtyFields: boolean
   saveError: string | null
   clearSaveError: () => void
   isSubmitting: boolean
-  onActivate?: () => void
-  onDeactivate?: () => void
+  /** Enter edit mode (only works in mode="rw") */
+  startEditing: () => void
+  /** Exit edit mode, discarding uncommitted changes */
+  stopEditing: () => void
 }
 
 type FieldType =
@@ -350,19 +377,25 @@ interface EntityFormProps {
   view?: EditableView | null
   /** Default values for create mode */
   defaultValues?: Record<string, any>
-  /** Whether the form is editable (default: true) */
-  editable?: boolean
   /**
-   * How edit mode is activated:
-   * - "field" (default): clicking any field activates edit mode
-   * - "form": clicking anywhere in the form activates edit mode
-   * - "trigger": only via external trigger (e.g., EditTrigger component or ref)
+   * Form mode: "r" (read-only), "rw" (read-write), "w" (write-only)
+   * - Defaults to "w" for create (no view), "rw" for edit (has view)
+   * - "r": View only, no editing allowed
+   * - "rw": View first, can enter edit mode via editTrigger or EditTrigger button
+   * - "w": Always editing, no view state
    */
-  activateOn?: ActivateOn
-  /** Called when user clicks to activate edit mode */
-  onActivate?: () => void
-  /** Called when focus leaves the form and there are no dirty fields */
-  onDeactivate?: () => void
+  mode?: FormMode
+  /**
+   * How edit mode is entered (only applies when mode="rw"):
+   * - "field" (default): clicking any field starts editing
+   * - "form": clicking anywhere in the form starts editing
+   * - null: no implicit click triggering (only EditTrigger button works)
+   */
+  editTrigger?: EditTrigger
+  /** Called when entering edit mode */
+  onStartEditing?: () => void
+  /** Called when exiting edit mode */
+  onStopEditing?: () => void
   children: ReactNode
   /** Called after successful create with the new view */
   onCreate?: (view: EditableView) => void
@@ -380,10 +413,10 @@ export function EntityForm({
   model,
   view: viewProp,
   defaultValues: defaultValuesProp,
-  editable = true,
-  activateOn = "field",
-  onActivate,
-  onDeactivate,
+  mode: modeProp,
+  editTrigger: editTriggerProp,
+  onStartEditing,
+  onStopEditing,
   children,
   onCreate,
   onSuccess,
@@ -394,7 +427,46 @@ export function EntityForm({
   const [createdView, setCreatedView] = useState<EditableView | null>(null)
   const view = viewProp ?? createdView
 
-  const mode = view ? "edit" : "create"
+  // Is this a new entity (create) or existing (edit)?
+  const isNew = !view
+
+  // Resolve form mode: default to "w" for create, "rw" for edit
+  const formMode: FormMode = modeProp ?? (isNew ? "w" : "rw")
+
+  // Resolve edit trigger (only matters for mode="rw")
+  const editTrigger: EditTrigger = editTriggerProp ?? "field"
+
+  // Internal editing state for mode="rw"
+  // - mode="r": always false (read-only)
+  // - mode="w": always true (write-only)
+  // - mode="rw": starts false, toggled by startEditing/stopEditing
+  const [isEditing, setIsEditing] = useState(false)
+
+  // Compute actual editing state based on mode
+  const editing = formMode === "w" ? true : formMode === "r" ? false : isEditing
+
+  // Reset editing state when form mode changes (e.g., create → edit transition)
+  useEffect(() => {
+    if (formMode === "rw") {
+      setIsEditing(false) // Start in view mode for rw
+    }
+  }, [formMode])
+
+  // Start editing handler (only works in mode="rw")
+  const startEditing = useCallback(() => {
+    if (formMode === "rw" && !isEditing) {
+      setIsEditing(true)
+      onStartEditing?.()
+    }
+  }, [formMode, isEditing, onStartEditing])
+
+  // Stop editing handler - clears overlay and exits edit mode
+  const stopEditing = useCallback(() => {
+    if (formMode === "rw" && isEditing) {
+      setIsEditing(false)
+      onStopEditing?.()
+    }
+  }, [formMode, isEditing, onStopEditing])
 
   // Validate props
   if (!view && !model) {
@@ -421,13 +493,13 @@ export function EntityForm({
     setSaveError(null)
   }, [entityId])
 
-  // Clear overlay when exiting edit mode (editable changes from true to false)
+  // Clear overlay when exiting edit mode (editing changes from true to false)
   useEffect(() => {
-    if (!editable) {
+    if (!editing) {
       setOverlay({})
       setSaveError(null)
     }
-  }, [editable])
+  }, [editing])
 
   // Subscribe to view changes: clean overlay and force re-render
   // Note: The JS view wrapper reference may change across renders (ankurah#194), but all
@@ -436,15 +508,8 @@ export function EntityForm({
   useEffect(() => {
     if (!view) return
 
-    console.log("[EntityForm] Setting up subscribe for entity:", entityId)
-
     // subscribe() returns a SubscriptionGuard (RAII pattern), not a function
     const guard = view.subscribe(() => {
-      console.log("[EntityForm] Subscribe callback fired! View values:", {
-        name: view.name,
-        email: view.email,
-      })
-
       // Clean overlay entries where view now matches overlay value
       // Supports dot notation for embedded structs
       setOverlay((prev) => {
@@ -465,7 +530,6 @@ export function EntityForm({
 
     // Explicit cleanup (also handled by FinalizationRegistry, but being explicit)
     return () => {
-      console.log("[EntityForm] Cleaning up subscribe for entity:", entityId)
       guard.free()
     }
   }, [entityId])
@@ -473,6 +537,8 @@ export function EntityForm({
   // Set a value in the overlay
   // If value matches view, remove from overlay (no longer dirty)
   // Supports dot notation for embedded structs
+  // Note: Uses entityId as dep instead of view for stability (ankurah views are "live" -
+  // property getters read from underlying CRDT, so the captured view stays current)
   const setOverlayValue = useCallback((name: string, value: any) => {
     setOverlay((prev) => {
       if (value === getNestedValue(view, name)) {
@@ -486,17 +552,21 @@ export function EntityForm({
     })
     // Clear save error when user starts editing
     setSaveError(null)
-  }, [view])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entityId])
 
   // Check if any fields are dirty
+  // Note: Uses entityId instead of view for stability. View subscription triggers
+  // forceRender which updates overlay, so hasDirtyFields recalculates correctly.
   const hasDirtyFields = useMemo(() => {
-    if (mode === "create") {
+    if (isNew) {
       // In create mode, dirty if any values in overlay
       return Object.keys(overlay).some((k) => overlay[k] !== "")
     }
     // Support dot notation: compare overlay value to nested view value
     return Object.keys(overlay).some((k) => overlay[k] !== getNestedValue(view, k))
-  }, [overlay, view, mode])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [overlay, entityId, isNew])
 
   // Handle form submit
   const handleSubmit = useCallback(
@@ -508,7 +578,7 @@ export function EntityForm({
       try {
         const trx = getDeps().getContext().begin()
 
-        if (mode === "edit" && view) {
+        if (!isNew && view) {
           // Edit: apply only dirty fields
           const mutable = view.edit(trx)
 
@@ -560,8 +630,9 @@ export function EntityForm({
 
           await trx.commit()
           setOverlay({})
+          stopEditing()
           onSuccess?.()
-        } else if (mode === "create" && model) {
+        } else if (isNew && model) {
           // Create: use overlay as the entity data
           // Group by root to handle embedded structs (e.g., address.street1 → address: { street1 })
           const grouped = groupByRoot(overlay)
@@ -598,70 +669,77 @@ export function EntityForm({
         setIsSubmitting(false)
       }
     },
-    [mode, view, model, overlay, defaultValuesProp, onCreate, onSuccess, onError]
+    // Note: Uses entityId instead of view for stability (view is still accessed via closure)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [isNew, entityId, model, overlay, defaultValuesProp, stopEditing, onCreate, onSuccess, onError]
   )
 
   const contextValue = useMemo<EntityFormContextValue>(
     () => ({
       view,
-      mode,
-      editable,
-      activateOn,
+      isNew,
+      editing,
+      editTrigger,
+      formMode,
       overlay,
       setOverlayValue,
       hasDirtyFields,
       saveError,
       clearSaveError,
       isSubmitting,
-      onActivate,
-      onDeactivate,
+      startEditing,
+      stopEditing,
     }),
     [
       view,
-      mode,
-      editable,
-      activateOn,
+      isNew,
+      editing,
+      editTrigger,
+      formMode,
       overlay,
       setOverlayValue,
       hasDirtyFields,
       saveError,
       clearSaveError,
       isSubmitting,
-      onActivate,
-      onDeactivate,
+      startEditing,
+      stopEditing,
     ]
   )
 
-  // Handle blur: deactivate if focus leaves the form and no dirty fields
+  // Handle blur: exit edit mode if focus leaves the form and no dirty fields
   const handleFormBlur = useCallback(
     (e: React.FocusEvent<HTMLFormElement>) => {
+      if (formMode !== "rw") return // Only applies to rw mode
       // Check if focus is moving to another element within the form
       const relatedTarget = e.relatedTarget as Node | null
       if (relatedTarget && e.currentTarget.contains(relatedTarget)) {
         return // Focus staying within form
       }
-      // Focus leaving form - deactivate if clean
-      if (!hasDirtyFields && onDeactivate) {
-        onDeactivate()
+      // Focus leaving form - exit edit mode if clean
+      if (!hasDirtyFields) {
+        stopEditing()
       }
     },
-    [hasDirtyFields, onDeactivate]
+    [formMode, hasDirtyFields, stopEditing]
   )
 
-  // Handle form-level click for activateOn="form"
+  // Handle form-level click for editTrigger="form"
   const handleFormClick = useCallback(() => {
-    if (activateOn === "form" && !editable && onActivate) {
-      onActivate()
+    if (formMode === "rw" && editTrigger === "form" && !editing) {
+      startEditing()
     }
-  }, [activateOn, editable, onActivate])
+  }, [formMode, editTrigger, editing, startEditing])
 
   return (
     <EntityFormContext.Provider value={contextValue}>
       <form
         onSubmit={handleSubmit}
         onBlur={handleFormBlur}
-        onClick={activateOn === "form" ? handleFormClick : undefined}
-        className={cn(className, activateOn === "form" && !editable && "cursor-text")}
+        onClick={editTrigger === "form" ? handleFormClick : undefined}
+        className={cn(className, editTrigger === "form" && !editing && "cursor-text")}
+        data-form-mode={formMode}
+        data-editing={editing || undefined}
       >
         {children}
       </form>
@@ -699,27 +777,27 @@ export function Field({
   icon,
   labelClassName,
 }: FieldProps) {
-  const { view, overlay, setOverlayValue, editable, activateOn, onActivate } = useEntityFormContext()
+  const { view, overlay, setOverlayValue, editing, editTrigger, formMode, startEditing } = useEntityFormContext()
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | HTMLButtonElement>(null)
   const UI = getUI()
 
-  // Field is disabled if explicitly disabled OR if form is not editable
-  const isDisabled = disabled || !editable
+  // Field is disabled if explicitly disabled OR if form is not in editing mode
+  const isDisabled = disabled || !editing
 
-  // Handler to activate edit mode when clicking a non-editable field
-  // Only active when activateOn="field"
-  const handleActivate = useCallback(() => {
-    if (activateOn === "field" && !editable && onActivate) {
-      onActivate()
-      // Focus this field after React re-renders with editable=true
+  // Handler to start editing when clicking a non-editing field
+  // Only active when editTrigger="field" and mode="rw"
+  const handleStartEditing = useCallback(() => {
+    if (formMode === "rw" && editTrigger === "field" && !editing) {
+      startEditing()
+      // Focus this field after React re-renders with editing=true
       requestAnimationFrame(() => {
         inputRef.current?.focus()
       })
     }
-  }, [activateOn, editable, onActivate])
+  }, [formMode, editTrigger, editing, startEditing])
 
   // Should this field show clickable cursor in view mode?
-  const canActivate = activateOn === "field" && !editable && !disabled
+  const canStartEditing = formMode === "rw" && editTrigger === "field" && !editing && !disabled
 
   // Compute display value: overlay if edited, otherwise view
   // Supports dot notation for embedded structs (e.g., "address.street1")
@@ -747,8 +825,8 @@ export function Field({
         data-field=""
         data-field-type="checkbox"
         data-dirty={dirty || undefined}
-        data-editable={editable || undefined}
-        onClick={handleActivate}
+        data-editing={editing || undefined}
+        onClick={handleStartEditing}
       >
         {iconElement}
         <input
@@ -776,8 +854,8 @@ export function Field({
         data-field=""
         data-field-type="select"
         data-dirty={dirty || undefined}
-        data-editable={editable || undefined}
-        onClick={handleActivate}
+        data-editing={editing || undefined}
+        onClick={handleStartEditing}
       >
         {labelElement}
         {iconElement}
@@ -790,7 +868,7 @@ export function Field({
             ref={inputRef as React.RefObject<HTMLButtonElement>}
             id={name}
             data-dirty={dirty || undefined}
-            data-editable={editable || undefined}
+            data-editing={editing || undefined}
           >
             <UI.SelectValue placeholder={placeholder} />
           </UI.SelectTrigger>
@@ -814,8 +892,8 @@ export function Field({
         data-field=""
         data-field-type="textarea"
         data-dirty={dirty || undefined}
-        data-editable={editable || undefined}
-        onClick={handleActivate}
+        data-editing={editing || undefined}
+        onClick={handleStartEditing}
       >
         {labelElement}
         {iconElement}
@@ -827,7 +905,7 @@ export function Field({
           disabled={isDisabled}
           onChange={(e) => setOverlayValue(name, e.target.value)}
           data-dirty={dirty || undefined}
-          data-editable={editable || undefined}
+          data-editing={editing || undefined}
         />
       </div>
     )
@@ -841,8 +919,8 @@ export function Field({
         data-field=""
         data-field-type="number"
         data-dirty={dirty || undefined}
-        data-editable={editable || undefined}
-        onClick={handleActivate}
+        data-editing={editing || undefined}
+        onClick={handleStartEditing}
       >
         {labelElement}
         {iconElement}
@@ -858,7 +936,7 @@ export function Field({
             setOverlayValue(name, numValue)
           }}
           data-dirty={dirty || undefined}
-          data-editable={editable || undefined}
+          data-editing={editing || undefined}
         />
       </div>
     )
@@ -871,8 +949,8 @@ export function Field({
       data-field=""
       data-field-type={type}
       data-dirty={dirty || undefined}
-      data-editable={editable || undefined}
-      onClick={handleActivate}
+      data-editing={editing || undefined}
+      onClick={handleStartEditing}
     >
       {labelElement}
       {iconElement}
@@ -885,7 +963,7 @@ export function Field({
         disabled={isDisabled}
         onChange={(e: React.ChangeEvent<HTMLInputElement>) => setOverlayValue(name, e.target.value)}
         data-dirty={dirty || undefined}
-        data-editable={editable || undefined}
+        data-editing={editing || undefined}
       />
     </div>
   )
@@ -911,6 +989,47 @@ export function Submit({ children, className }: SubmitProps) {
       className={className}
     >
       {isSubmitting ? "Saving..." : children}
+    </UI.Button>
+  )
+}
+
+// =============================================================================
+// Cancel
+// =============================================================================
+
+interface CancelProps {
+  children?: ReactNode
+  className?: string
+}
+
+/**
+ * Button that discards changes and exits edit mode.
+ * Only functional in mode="rw" - does nothing in "w" mode (create).
+ *
+ * ```tsx
+ * <EditOnly>
+ *   <Cancel>Discard</Cancel>
+ *   <Submit>Save</Submit>
+ * </EditOnly>
+ * ```
+ */
+export function Cancel({ children = "Cancel", className }: CancelProps) {
+  const { formMode, stopEditing, isSubmitting } = useEntityFormContext()
+  const UI = getUI()
+
+  // Cancel only makes sense in rw mode (view/edit toggle)
+  // In "w" mode (create), there's no view state to return to
+  if (formMode !== "rw") return null
+
+  return (
+    <UI.Button
+      type="button"
+      variant="outline"
+      disabled={isSubmitting}
+      onClick={stopEditing}
+      className={className}
+    >
+      {children}
     </UI.Button>
   )
 }
@@ -960,15 +1079,15 @@ export function SaveError({ className }: SaveErrorProps) {
 // =============================================================================
 
 /**
- * Hook to access the editable state from EntityForm context.
- * Returns { editable, mode } where editable is the current edit state.
+ * Hook to access editing state from EntityForm context.
+ * Returns { editing, isNew, formMode } for conditional rendering.
  */
-export function useEditable() {
+export function useEditing() {
   const ctx = useContext(EntityFormContext)
   if (!ctx) {
-    throw new Error("useEditable must be used within EntityForm")
+    throw new Error("useEditing must be used within EntityForm")
   }
-  return { editable: ctx.editable, mode: ctx.mode }
+  return { editing: ctx.editing, isNew: ctx.isNew, formMode: ctx.formMode }
 }
 
 interface ModeProps {
@@ -976,8 +1095,8 @@ interface ModeProps {
 }
 
 /**
- * Renders children only when in view mode (editable=false).
- * Use for custom view-mode layouts like icons next to values.
+ * Renders children only when NOT in editing mode.
+ * Use for view-specific layouts like formatted displays.
  *
  * ```tsx
  * <ViewOnly>
@@ -993,17 +1112,18 @@ export function ViewOnly({ children }: ModeProps) {
   if (!ctx) {
     throw new Error("ViewOnly must be used within EntityForm")
   }
-  return ctx.editable ? null : <>{children}</>
+  return ctx.editing ? null : <>{children}</>
 }
 
 /**
- * Renders children only when in edit mode (editable=true).
- * Use for edit-specific UI like labels above inputs.
+ * Renders children only when in editing mode.
+ * Use for edit-specific UI like save/cancel buttons or additional fields.
  *
  * ```tsx
  * <EditOnly>
- *   <UI.Label>Name</UI.Label>
- *   <UI.Input value={name} onChange={...} />
+ *   <SaveError />
+ *   <Cancel />
+ *   <Submit>Save</Submit>
  * </EditOnly>
  * ```
  */
@@ -1012,7 +1132,7 @@ export function EditOnly({ children }: ModeProps) {
   if (!ctx) {
     throw new Error("EditOnly must be used within EntityForm")
   }
-  return ctx.editable ? <>{children}</> : null
+  return ctx.editing ? <>{children}</> : null
 }
 
 // =============================================================================
@@ -1026,14 +1146,14 @@ interface EditTriggerProps {
 }
 
 /**
- * Button that activates edit mode when clicked.
- * Only visible in view mode (editable=false).
- * Use with activateOn="trigger" for explicit edit activation.
+ * Button that enters edit mode when clicked.
+ * Only visible when not editing (and mode != "r").
+ * Use with editTrigger={null} for explicit edit buttons.
  *
  * ```tsx
  * import { Pencil } from "lucide-react"
  *
- * <EntityForm activateOn="trigger" editable={isEditing} onActivate={() => setIsEditing(true)}>
+ * <EntityForm view={customerView} editTrigger={null}>
  *   <div className="flex items-center justify-between">
  *     <h2>Customer Info</h2>
  *     <EditTrigger><Pencil className="w-4 h-4" /></EditTrigger>
@@ -1048,17 +1168,17 @@ export function EditTrigger({ children, className }: EditTriggerProps) {
     throw new Error("EditTrigger must be used within EntityForm")
   }
 
-  const { editable, onActivate } = ctx
+  const { editing, formMode, startEditing } = ctx
 
-  // Only show in view mode
-  if (editable) return null
+  // Only show in view mode (not editing) and only if editing is possible (not mode="r")
+  if (editing || formMode === "r") return null
 
   return (
     <button
       type="button"
       onClick={(e) => {
         e.stopPropagation() // Don't trigger form-level click
-        onActivate?.()
+        startEditing()
       }}
       className={cn(
         "text-muted-foreground hover:text-foreground transition-colors p-1 rounded hover:bg-muted",
