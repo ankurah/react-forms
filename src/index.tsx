@@ -341,6 +341,8 @@ interface EntityFormContextValue {
   startEditing: () => void
   /** Exit edit mode, discarding uncommitted changes */
   stopEditing: () => void
+  /** Transform functions for ref fields */
+  refTransforms?: Record<string, RefTransform>
 }
 
 type FieldType =
@@ -368,7 +370,7 @@ function formatSaveError(message: string): { message: string; field: string | nu
   return { message: `${label} is required`, field: match[1] }
 }
 
-function useEntityFormContext() {
+export function useEntityFormContext() {
   const ctx = useContext(EntityFormContext)
   if (!ctx) {
     throw new Error("Field must be used within EntityForm")
@@ -379,6 +381,17 @@ function useEntityFormContext() {
 // =============================================================================
 // EntityForm
 // =============================================================================
+
+/**
+ * Transform functions for entity reference fields.
+ * Used to convert between display values (strings) and entity references.
+ */
+export interface RefTransform {
+  /** Convert entity ref to display value (string). Called when reading field value. */
+  toDisplay: (ref: any) => string | null
+  /** Convert display value (string) to entity ref. Called when saving. Must be async. */
+  fromDisplay: (value: string | null, context: any) => Promise<any>
+}
 
 interface EntityFormProps {
   /** Model class for create mode */
@@ -416,6 +429,23 @@ interface EntityFormProps {
   /** Max time to wait for save before showing error (ms). Set 0 to disable. */
   submitTimeoutMs?: number
   className?: string
+  /**
+   * Transform functions for entity reference fields.
+   * Maps field name to transform functions for converting between display values and refs.
+   *
+   * @example
+   * refTransforms={{
+   *   service_plan: {
+   *     toDisplay: (ref) => ref?.id.to_base64() ?? '__none__',
+   *     fromDisplay: async (value, ctx) => {
+   *       if (value === '__none__' || !value) return null;
+   *       const plan = await ServicePlan.get(ctx, EntityId.from_base64(value));
+   *       return plan.r();
+   *     }
+   *   }
+   * }}
+   */
+  refTransforms?: Record<string, RefTransform>
 }
 
 /**
@@ -435,6 +465,7 @@ export function EntityForm({
   onError,
   submitTimeoutMs: submitTimeoutMsProp,
   className,
+  refTransforms,
 }: EntityFormProps) {
   // Track internally created view (for create-then-edit flow)
   const [createdView, setCreatedView] = useState<EditableView | null>(null)
@@ -653,22 +684,37 @@ export function EntityForm({
                 console.warn(`EntityForm: Cannot set embedded struct "${rootName}"`)
               }
             } else {
-              // Primitive field: existing logic
-              if (value === viewValue) continue // Skip if not actually dirty
-
+              // Primitive field or ref field
               const field = mutable[rootName]
               if (!field) continue
 
               // Normalize empty strings to null
               const normalizedValue = value === "" ? null : value
 
-              // Detect field type and apply
-              if (typeof field.replace === "function") {
-                field.replace(normalizedValue ?? "")
-              } else if (typeof field.set === "function") {
-                field.set(normalizedValue)
+              // Check if this field has a ref transform
+              const transform = refTransforms?.[rootName]
+              if (transform) {
+                // Ref field: use transform to convert display value to entity ref
+                const ctx = getDeps().getContext()
+                const refValue = await transform.fromDisplay(normalizedValue, ctx)
+                if (typeof field.set === "function") {
+                  field.set(refValue)
+                } else {
+                  console.warn(`EntityForm: Cannot set ref field "${rootName}"`)
+                }
               } else {
-                console.warn(`EntityForm: Unknown field type for "${rootName}", skipping`)
+                // Regular primitive field
+                // Skip if not actually dirty (for non-ref fields)
+                if (value === viewValue) continue
+
+                // Detect field type and apply
+                if (typeof field.replace === "function") {
+                  field.replace(normalizedValue ?? "")
+                } else if (typeof field.set === "function") {
+                  field.set(normalizedValue)
+                } else {
+                  console.warn(`EntityForm: Unknown field type for "${rootName}", skipping`)
+                }
               }
             }
           }
@@ -687,6 +733,9 @@ export function EntityForm({
             ...(defaultValuesProp ?? {}),
           }
 
+          const ctx = getDeps().getContext()
+
+          // First, process overlay entries (user-edited fields)
           for (const [key, value] of Object.entries(grouped)) {
             if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
               // Embedded struct: normalize empty strings to null within the object
@@ -696,7 +745,28 @@ export function EntityForm({
               }
               createData[key] = normalized
             } else {
-              createData[key] = value === "" ? null : value
+              // Check if this field has a ref transform
+              const transform = refTransforms?.[key]
+              if (transform) {
+                // Ref field: use transform to convert display value to entity ref
+                const normalizedValue = value === "" ? null : value
+                createData[key] = await transform.fromDisplay(normalizedValue, ctx)
+              } else {
+                createData[key] = value === "" ? null : value
+              }
+            }
+          }
+
+          // Then, process default values that have refTransforms but weren't in the overlay
+          // This handles cases like property being pre-filled from URL params
+          if (refTransforms && defaultValuesProp) {
+            for (const [key, transform] of Object.entries(refTransforms)) {
+              // Only process if key is in defaults but NOT in grouped (user didn't edit it)
+              if (key in defaultValuesProp && !(key in grouped)) {
+                const value = defaultValuesProp[key]
+                const normalizedValue = value === "" ? null : value
+                createData[key] = await transform.fromDisplay(normalizedValue, ctx)
+              }
             }
           }
 
@@ -733,7 +803,7 @@ export function EntityForm({
     },
     // Note: Uses entityId instead of view for stability (view is still accessed via closure)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [isNew, entityId, model, overlay, defaultValuesProp, stopEditing, onCreate, onSuccess, onError]
+    [isNew, entityId, model, overlay, defaultValuesProp, refTransforms, stopEditing, onCreate, onSuccess, onError]
   )
 
   const contextValue = useMemo<EntityFormContextValue>(
@@ -752,6 +822,7 @@ export function EntityForm({
       isSubmitting,
       startEditing,
       stopEditing,
+      refTransforms,
     }),
     [
       view,
@@ -767,6 +838,7 @@ export function EntityForm({
       clearSaveError,
       isSubmitting,
       startEditing,
+      refTransforms,
       stopEditing,
     ]
   )
@@ -779,6 +851,16 @@ export function EntityForm({
       const relatedTarget = e.relatedTarget as Node | null
       if (relatedTarget && e.currentTarget.contains(relatedTarget)) {
         return // Focus staying within form
+      }
+      // Check if focus is moving to a Radix portal (dropdown, dialog, etc.)
+      // Radix portals are rendered outside the form but are still part of the UI interaction
+      if (relatedTarget instanceof HTMLElement) {
+        const isRadixPortal = relatedTarget.closest('[data-radix-popper-content-wrapper]') ||
+                              relatedTarget.closest('[data-radix-select-viewport]') ||
+                              relatedTarget.closest('[role="listbox"]')
+        if (isRadixPortal) {
+          return // Focus moving to portal, stay in edit mode
+        }
       }
       // Focus leaving form - exit edit mode if clean
       if (!hasDirtyFields) {
@@ -844,7 +926,7 @@ export function Field({
   icon,
   labelClassName,
 }: FieldProps) {
-  const { view, overlay, setOverlayValue, editing, editTrigger, formMode, startEditing, saveErrorField } = useEntityFormContext()
+  const { view, overlay, setOverlayValue, editing, editTrigger, formMode, startEditing, saveErrorField, refTransforms } = useEntityFormContext()
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | HTMLButtonElement | HTMLSelectElement>(null)
   const UI = getUI()
 
@@ -867,7 +949,10 @@ export function Field({
 
   // Compute display value: overlay if edited, otherwise view
   // Supports dot notation for embedded structs (e.g., "address.street1")
-  const viewValue = getNestedValue(view, name) ?? ""
+  // For ref fields with transforms, convert entity ref to display value
+  const transform = refTransforms?.[name]
+  const rawViewValue = getNestedValue(view, name)
+  const viewValue = transform ? (transform.toDisplay(rawViewValue) ?? "") : (rawViewValue ?? "")
   const value = name in overlay ? overlay[name] : viewValue
 
   // Dirty if field is in overlay and differs from view
